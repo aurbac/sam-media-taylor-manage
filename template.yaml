@@ -1,0 +1,224 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  sam-media-taylor-manage
+
+  Sample SAM Template for sam-media-taylor-manage
+
+# More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
+Globals:
+  Function:
+    Timeout: 3
+    MemorySize: 128
+
+Parameters:
+  CloudFrontEndpoint:
+    Type: String
+    Description: CloudFront endpoint
+  BucketName:
+    Type: String
+    Description: Bucket name
+    
+
+
+Resources:
+
+
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      #Auth:
+      #  Authorizers:
+      #    GeneralAuth:
+      #      AuthorizationScopes:
+      #        - aws.cognito.signin.user.admin # This scope is returned by Amplify with congito, use: headers: { Authorization: `Bearer ${(await Auth.currentSession()).getAccessToken().getJwtToken()}` }, 
+      #      IdentitySource: "$request.header.Authorization"
+      #      JwtConfiguration:
+      #        issuer: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPoolId}
+      #        audience:
+      #          - !Ref Audience
+      CorsConfiguration:
+        AllowMethods:
+          - GET
+          - POST
+          - OPTIONS
+        AllowHeaders:
+          - Content-Type
+          - X-Amz-Date
+          - Authorization
+          - X-Amz-Security-Token
+        AllowOrigins:
+          - http://localhost:3000
+          - https://dev.d2y8rf8ldej3tk.amplifyapp.com
+          - "*"
+
+  SpacesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+      - AttributeName: "channel_id"
+        AttributeType: "S"
+      - AttributeName: "time_stamp"
+        AttributeType: "N"
+      KeySchema:
+      - AttributeName: "channel_id"
+        KeyType: "HASH"
+      - AttributeName: "time_stamp"
+        KeyType: "RANGE"
+      BillingMode: "PAY_PER_REQUEST"
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: True
+      SSESpecification:
+        SSEEnabled: True
+  
+  MediaTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+      - AttributeName: "media_id"
+        AttributeType: "S"
+      KeySchema:
+      - AttributeName: "media_id"
+        KeyType: "HASH"
+      BillingMode: "PAY_PER_REQUEST"
+      SSESpecification:
+        SSEEnabled: True
+
+
+  AddUpdateSpaceFunction:
+    Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
+    Properties:
+      CodeUri: code/add-update-space/
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      MemorySize: 512
+      Environment:
+        Variables:
+          MEDIA_TABLE: !Ref MediaTable
+          SPACES_TABLE: !Ref SpacesTable
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MediaTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpacesTable
+      Events:
+        ApiEvent:
+          Type: HttpApi
+          Properties:
+            Path: /addUpdateSpace
+            Method: post
+            ApiId: !Ref HttpApi
+#            Auth:
+#              Authorizer: GeneralAuth
+
+
+
+  GetMediaFunction:
+    Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
+    Properties:
+      CodeUri: code/get-media/
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      MemorySize: 512
+      Environment:
+        Variables:
+          MEDIA_TABLE: !Ref MediaTable
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MediaTable
+        - AWSLambdaExecute
+      Events:
+        ApiEvent:
+          Type: HttpApi
+          Properties:
+            Path: /getMedia
+            Method: get
+            ApiId: !Ref HttpApi
+#            Auth:
+#              Authorizer: GeneralAuth
+
+
+  GetSpacesFunction:
+    Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
+    Properties:
+      CodeUri: code/get-spaces/
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      MemorySize: 512
+      Environment:
+        Variables:
+          SPACES_TABLE: !Ref SpacesTable
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpacesTable
+        - AWSLambdaExecute
+      Events:
+        ApiEvent:
+          Type: HttpApi
+          Properties:
+            Path: /getSpaces
+            Method: get
+            ApiId: !Ref HttpApi
+#            Auth:
+#              Authorizer: GeneralAuth
+
+
+  ScheduleFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: code/schedule/
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      Tracing: Active
+      Environment:
+        Variables:
+          MEDIA_TABLE: !Ref MediaTable
+          SPACES_TABLE: !Ref SpacesTable
+          CLOUDFRONT_ENDPOINT: !Ref CloudFrontEndpoint
+          BUCKET_NAME: !Ref BucketName
+      Timeout: 300
+      MemorySize: 128
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MediaTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpacesTable
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+                - medialive:BatchUpdateSchedule
+                - mediatailor:CreatePrefetchSchedule
+              Resource: '*'
+        - AWSLambdaExecute
+      Events:
+        Schedule:
+          Type: Schedule
+          Properties:
+            Name: !Sub '${AWS::StackName}-SCHEDULE-SET-JOB'
+            Schedule: "cron(*/10 * * * ? *)"
+
+
+  ApplicationResourceGroup:
+    Type: AWS::ResourceGroups::Group
+    Properties:
+      Name:
+        Fn::Sub: ApplicationInsights-SAM-${AWS::StackName}
+      ResourceQuery:
+        Type: CLOUDFORMATION_STACK_1_0
+  ApplicationInsightsMonitoring:
+    Type: AWS::ApplicationInsights::Application
+    Properties:
+      ResourceGroupName:
+        Ref: ApplicationResourceGroup
+      AutoConfigurationEnabled: 'true'
+Outputs:
+  # ServerlessRestApi is an implicit API created out of Events key under Serverless::Function
+  # Find out more about other implicit resources you can reference within SAM
+  # https://github.com/awslabs/serverless-application-model/blob/master/docs/internals/generated_resources.rst#api
+  HttpApiUrl:
+    Description: URL of your API endpoint
+    Value:
+      Fn::Sub: 'https://${HttpApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/'
